@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { solveExchanger, correctionFactorF, generateProfile, effectivenessTubosCorazaN, overallUFromHiHo } from "./engine.js";
+import { getFluidProperties } from "./convection.js";
 
 describe("Resistencia de pared del tubo en el cálculo de U (fix #1)", () => {
   it("sin datos de pared (ni Do ni k): se comporta como antes, U = 1/(1/hi + 1/ho)", () => {
@@ -144,6 +145,167 @@ describe("Convección automática con flujo cruzado externo sobre un cilindro (f
     // el aviso debe mencionar Churchill-Bernstein para h0 y no confundirlo con Dittus-Boelter/ánulo
     const avisos = r.warnings.join(" ");
     expect(avisos).toMatch(/Churchill-Bernstein/);
+  });
+});
+
+describe("Fracción de pérdida de calor y eficiencia de transferencia MEDIDAS (fix #5, tipo Prob. 11-89)", () => {
+  const dataBase = {
+    tipo_intercambiador: "tubos_coraza",
+    configuracion_flujo: "contraflujo",
+    fluido_caliente: { nombre: "agua caliente", temp_entrada_C: 71.5, temp_salida_C: 58.2, flujo_masico_kg_s: 0.0175, cp_kJ_kgC: 4.18 },
+    fluido_frio: { nombre: "agua fría", temp_entrada_C: 19.7, temp_salida_C: 27.8, flujo_masico_kg_s: 0.025833, cp_kJ_kgC: 4.18 },
+    area_m2: 0.02,
+  };
+
+  it("calcula la fracción de pérdida y la eficiencia comparando los DOS balances de energía medidos", () => {
+    const r = solveExchanger(dataBase);
+    const Qhot = 0.0175 * 4180 * (71.5 - 58.2);
+    const Qcold = 0.025833 * 4180 * (27.8 - 19.7);
+    const fraccionEsperada = (Qhot - Qcold) / Qhot;
+    const eficienciaEsperada = Qcold / Qhot;
+
+    expect(r.fraccionPerdidaMedida).toBeCloseTo(fraccionEsperada, 3);
+    expect(r.eficienciaTransferenciaMedida).toBeCloseTo(eficienciaEsperada, 3);
+    // el libro reporta un intercambiador con pérdidas notables, no adiabático (~10%)
+    expect(r.fraccionPerdidaMedida).toBeGreaterThan(0.05);
+    expect(r.fraccionPerdidaMedida).toBeLessThan(0.2);
+  });
+
+  it("si los dos balances coinciden casi perfecto, la fracción de pérdida medida es ≈0 (prácticamente adiabático)", () => {
+    const data = {
+      tipo_intercambiador: "tubo_doble",
+      configuracion_flujo: "contraflujo",
+      fluido_caliente: { nombre: "agua caliente", temp_entrada_C: 80, temp_salida_C: 60, flujo_masico_kg_s: 1, cp_kJ_kgC: 4.18 },
+      fluido_frio: { nombre: "agua fría", temp_entrada_C: 20, temp_salida_C: 40, flujo_masico_kg_s: 1, cp_kJ_kgC: 4.18 },
+      area_m2: 5,
+    };
+    const r = solveExchanger(data);
+    expect(r.fraccionPerdidaMedida).toBeCloseTo(0, 6);
+    expect(r.eficienciaTransferenciaMedida).toBeCloseTo(1, 6);
+    // y no debe disparar el aviso de descuadre
+    expect(r.warnings.some((w) => /no coinciden bien/.test(w))).toBe(false);
+  });
+
+  it("dispara el aviso de descuadre cuando la diferencia entre balances supera 8%, mencionando el % real", () => {
+    const r = solveExchanger(dataBase);
+    expect(r.warnings.some((w) => /no coinciden bien/.test(w))).toBe(true);
+    expect(r.warnings.some((w) => /Fracción de pérdida/.test(w))).toBe(true);
+  });
+
+  it("si el enunciado YA da un porcentaje de pérdida asumido (perdida_calor_porcentaje), no se calcula la versión medida (para no confundir dato de entrada con dato derivado)", () => {
+    const data = {
+      ...dataBase,
+      perdida_calor_porcentaje: 3,
+    };
+    const r = solveExchanger(data);
+    expect(r.fraccionPerdidaMedida).toBeNull();
+    expect(r.eficienciaTransferenciaMedida).toBeNull();
+  });
+
+  it("si falta el gasto másico de un lado, no se puede medir nada (queda null, sin reventar)", () => {
+    const data = {
+      tipo_intercambiador: "tubo_doble",
+      configuracion_flujo: "contraflujo",
+      fluido_caliente: { nombre: "agua caliente", temp_entrada_C: 71.5, temp_salida_C: 58.2, flujo_masico_kg_s: 0.0175, cp_kJ_kgC: 4.18 },
+      fluido_frio: { nombre: "agua fría", temp_entrada_C: 19.7, temp_salida_C: 27.8, cp_kJ_kgC: 4.18 }, // sin flujo_masico_kg_s
+      area_m2: 0.02,
+      coeficiente_U_W_m2C: 1000,
+    };
+    const r = solveExchanger(data);
+    expect(r.fraccionPerdidaMedida).toBeNull();
+    expect(r.eficienciaTransferenciaMedida).toBeNull();
+  });
+});
+
+describe("Diseño inverso: número de tubos requerido dado un límite de velocidad (fix #4)", () => {
+  it("Problema tipo 11-116: Q dado directamente + velocidad máxima -> calcula el número de tubos", () => {
+    const data = {
+      tipo_intercambiador: "tubos_coraza",
+      configuracion_flujo: "contraflujo",
+      fluido_caliente: { nombre: "vapor de agua", cambio_fase: true },
+      fluido_frio: { nombre: "agua", temp_entrada_C: 20, temp_salida_C: 90, cp_kJ_kgC: 4.19, tipo_fluido: "agua" },
+      Q_dado_kW: 600,
+      fluido_por_tubo: "frio",
+      diametro_interior: 0.01,
+      velocidad_maxima_tubo_m_s: 3,
+    };
+    const r = solveExchanger(data);
+
+    // cálculo manual esperado
+    const mdotEsperado = (600 * 1000) / (4.19 * 1000 * (90 - 20));
+    const props = getFluidProperties("agua", 55); // (20+90)/2
+    const A = (Math.PI / 4) * 0.01 * 0.01;
+    const nExacto = mdotEsperado / (props.rho * 3 * A);
+    const nEsperado = Math.ceil(nExacto - 1e-9);
+
+    expect(r.numeroTubosRequerido).toBe(nEsperado);
+    expect(r.cold.flujo_masico_kg_s).toBeCloseTo(mdotEsperado, 6);
+  });
+
+  it("redondea SIEMPRE hacia arriba (si el número exacto no es entero, nunca se queda corto)", () => {
+    const data = {
+      tipo_intercambiador: "tubos_coraza",
+      configuracion_flujo: "contraflujo",
+      fluido_caliente: { nombre: "vapor de agua", cambio_fase: true },
+      fluido_frio: { nombre: "agua", temp_entrada_C: 20, temp_salida_C: 90, cp_kJ_kgC: 4.19, tipo_fluido: "agua" },
+      Q_dado_kW: 600,
+      fluido_por_tubo: "frio",
+      diametro_interior: 0.01,
+      velocidad_maxima_tubo_m_s: 3,
+    };
+    const r = solveExchanger(data);
+    const props = getFluidProperties("agua", 55);
+    const A = (Math.PI / 4) * 0.01 * 0.01;
+    const nExacto = r.cold.flujo_masico_kg_s / (props.rho * 3 * A);
+    expect(r.numeroTubosRequerido).toBeGreaterThanOrEqual(nExacto);
+    expect(r.numeroTubosRequerido - nExacto).toBeLessThan(1);
+  });
+
+  it("si ya se da numero_tubos explícitamente, NO se recalcula (se respeta el dato del usuario)", () => {
+    const data = {
+      tipo_intercambiador: "tubos_coraza",
+      configuracion_flujo: "contraflujo",
+      fluido_caliente: { nombre: "vapor de agua", cambio_fase: true },
+      fluido_frio: { nombre: "agua", temp_entrada_C: 20, temp_salida_C: 90, cp_kJ_kgC: 4.19, tipo_fluido: "agua" },
+      Q_dado_kW: 600,
+      fluido_por_tubo: "frio",
+      numero_tubos: 50,
+      diametro_interior: 0.01,
+      velocidad_maxima_tubo_m_s: 3,
+    };
+    const r = solveExchanger(data);
+    expect(r.numeroTubosRequerido).toBeNull();
+  });
+
+  it("sin fluido_por_tubo, no puede calcular el número de tubos y avisa por qué", () => {
+    const data = {
+      tipo_intercambiador: "tubos_coraza",
+      configuracion_flujo: "contraflujo",
+      fluido_caliente: { nombre: "vapor de agua", cambio_fase: true },
+      fluido_frio: { nombre: "agua", temp_entrada_C: 20, temp_salida_C: 90, cp_kJ_kgC: 4.19, tipo_fluido: "agua" },
+      Q_dado_kW: 600,
+      diametro_interior: 0.01,
+      velocidad_maxima_tubo_m_s: 3,
+    };
+    const r = solveExchanger(data);
+    expect(r.numeroTubosRequerido).toBeNull();
+    expect(r.warnings.some((w) => /fluido_por_tubo/.test(w))).toBe(true);
+  });
+
+  it("Q_dado_kW no se usa si ya se puede derivar Q de balances directos (prioridad a los datos reales)", () => {
+    const data = {
+      tipo_intercambiador: "tubo_doble",
+      configuracion_flujo: "contraflujo",
+      fluido_caliente: { nombre: "aceite", temp_entrada_C: 100, temp_salida_C: 80, flujo_masico_kg_s: 1, cp_kJ_kgC: 2 },
+      fluido_frio: { nombre: "agua", temp_entrada_C: 20, temp_salida_C: 30, flujo_masico_kg_s: 1, cp_kJ_kgC: 4.18 },
+      Q_dado_kW: 99999, // deliberadamente absurdo: no debe usarse
+      area_m2: 5,
+      coeficiente_U_W_m2C: 500,
+    };
+    const r = solveExchanger(data);
+    // Q real del balance de energía del aceite: 1*2*(100-80)=40 kW -> 40000 W
+    expect(r.Q_liberado).toBeCloseTo(40000, -1);
+    expect(r.Q).not.toBeCloseTo(99999000, -3);
   });
 });
 

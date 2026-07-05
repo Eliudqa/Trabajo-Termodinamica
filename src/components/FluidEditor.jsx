@@ -12,20 +12,33 @@ const TIPO_FLUIDO_LABELS = {
   otro: "Otro / no listado",
 };
 
-export default function FluidEditor({ title, icon, tone, fluid, onChange }) {
+const hasVal = (v) => v !== null && v !== undefined && v !== "";
+
+export default function FluidEditor({ title, icon, tone, fluid, onChange, needsConvection }) {
   const set = (k, v) => onChange({ ...fluid, [k]: v });
+
+  // "tipo_fluido" y "velocidad_m_s" solo son relevantes cuando el motor
+  // necesita calcular h por correlación (o si ya vienen llenos de la
+  // extracción) — en el resto de ejercicios son ruido innecesario.
+  const showTipoFluido = !!needsConvection || hasVal(fluid.tipo_fluido);
+  const showVelocidad = !!needsConvection || hasVal(fluid.velocidad_m_s);
+
   return (
     <div className={`hxs-fluid-card ${tone === "hot" ? "hxs-fluid-hot" : "hxs-fluid-cold"}`}>
       <div className="hxs-fluid-title">
         {icon} {title} — <span style={{ fontWeight: 400, opacity: 0.85 }}>{fluid.nombre || "sin nombre"}</span>
       </div>
-      <SelectField
-        label="Tipo de fluido (para tablas de propiedades)"
-        value={fluid.tipo_fluido || "otro"}
-        onChange={(v) => set("tipo_fluido", v)}
-        options={TIPO_FLUIDO_LABELS}
-      />
-      <div style={{ height: 9 }} />
+      {showTipoFluido && (
+        <>
+          <SelectField
+            label="Tipo de fluido (para tablas de propiedades)"
+            value={fluid.tipo_fluido || "otro"}
+            onChange={(v) => set("tipo_fluido", v)}
+            options={TIPO_FLUIDO_LABELS}
+          />
+          <div style={{ height: 9 }} />
+        </>
+      )}
       <div className="hxs-checkbox-row">
         <input type="checkbox" checked={!!fluid.cambio_fase} onChange={(e) => set("cambio_fase", e.target.checked)} />
         cambia de fase (condensa / hierve) en el proceso
@@ -48,7 +61,9 @@ export default function FluidEditor({ title, icon, tone, fluid, onChange }) {
         <div className="hxs-row">
           <NumField label="Gasto másico" suffix="kg/s" value={fluid.flujo_masico_kg_s} onChange={(v) => set("flujo_masico_kg_s", v)} />
           <NumField label="cp" suffix="kJ/kg·°C" value={fluid.cp_kJ_kgC} onChange={(v) => set("cp_kJ_kgC", v)} />
-          <NumField label="Velocidad (si va por el tubo)" suffix="m/s" value={fluid.velocidad_m_s} onChange={(v) => set("velocidad_m_s", v)} />
+          {showVelocidad && (
+            <NumField label="Velocidad (si va por el tubo)" suffix="m/s" value={fluid.velocidad_m_s} onChange={(v) => set("velocidad_m_s", v)} />
+          )}
         </div>
       )}
       {fluid.cp_estimado && !fluid.cambio_fase && (

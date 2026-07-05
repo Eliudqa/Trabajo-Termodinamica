@@ -63,6 +63,9 @@ export const RESPONSE_SCHEMA = {
     diametro_coraza_m: { type: "number" },
     configuracion_lado_externo: { type: "string", enum: ["anulo_tubo_doble", "flujo_cruzado_cilindro"] },
     velocidad_externa_m_s: { type: "number" },
+    Q_dado_kW: { type: "number" },
+    efectividad_dada: { type: "number" },
+    velocidad_maxima_tubo_m_s: { type: "number" },
     fluido_caliente: FLUID_SCHEMA,
     fluido_frio: FLUID_SCHEMA,
     coeficiente_U_W_m2C: { type: "number" },
@@ -112,6 +115,8 @@ export const RESPONSE_SCHEMA = {
     "fluido_por_tubo",
     "configuracion_lado_externo",
     "velocidad_externa_m_s",
+    "Q_dado_kW",
+    "velocidad_maxima_tubo_m_s",
     "coeficiente_U_W_m2C",
     "hi",
     "ho",
@@ -157,6 +162,10 @@ REGLAS:
       a) Directo, ya como resistencia Rf en h·ft²·°F/Btu o m²·°C/W (conviértelo a m²·°C/W si hace falta) → factor_incrustacion_i (lado interior/tubo) o factor_incrustacion_o (lado exterior/coraza).
       b) Como una CAPA de depósito/incrustación (p. ej. "una capa de 2 mm de espesor de caliza, k=1.3 W/m·°C") de la que das espesor y conductividad por separado, NO un valor Rf ya combinado → captura por separado incrustacion_i_espesor_m + incrustacion_i_k_W_mC (si la capa está en el lado interior/tubo) o incrustacion_o_espesor_m + incrustacion_o_k_W_mC (si está en el lado exterior/coraza). El motor de cálculo hace la división espesor/k automáticamente, no la hagas tú.
     Nunca captures ambos formatos para el mismo lado a la vez; usa el que el enunciado realmente da.
+13. Problemas de DISEÑO INVERSO (piden dimensionar algo, no solo evaluar un intercambiador ya definido):
+    - Si el enunciado da la razón/carga de transferencia de calor DIRECTAMENTE como un dato (p. ej. "la carga de transferencia de calor del calentador es de 600 kW"), y NO se puede derivar de otra forma más directa (gastos másicos y temperaturas de ambos fluidos), captúrala en Q_dado_kW (convertida a kW si hace falta, p. ej. Btu/h × 0.000293).
+    - Si el enunciado da la EFECTIVIDAD del intercambiador DIRECTAMENTE como dato (p. ej. "con una efectividad de 0.65", "la efectividad es 65%"), captúrala en efectividad_dada como decimal entre 0 y 1 (0.65, no 65). Esto es distinto de cuando la efectividad es la INCÓGNITA a calcular — solo llena este campo cuando el enunciado la da como un dato conocido de entrada, no cuando la pide como resultado.
+    - Si el enunciado pide encontrar CUÁNTOS TUBOS se necesitan dado un límite de velocidad (p. ej. "si el diámetro interior de los tubos es de 1 cm y la velocidad del agua no debe ser mayor a 3 m/s, determine cuántos tubos es necesario usar"), captura ese límite en velocidad_maxima_tubo_m_s (convertida a m/s) y NO captures numero_tubos (precisamente es la incógnita) — el motor lo calcula a partir del gasto másico del fluido del tubo, su densidad, el diámetro interior y esta velocidad máxima. Asegúrate de capturar también fluido_por_tubo para este caso (cuál de los dos fluidos es el que circula por dentro de los tubos), aun si el enunciado no requiere correlación convectiva.
 
 Responde ÚNICAMENTE con el JSON, sin texto adicional.
 

@@ -1,6 +1,6 @@
 import {
   AlertCircle, CheckCircle2, Flame, Snowflake, Thermometer, Gauge,
-  Square, Ruler, Hash, Percent, Scale, SlidersHorizontal,
+  Square, Ruler, Hash, Percent, Scale, SlidersHorizontal, ShieldAlert,
 } from "lucide-react";
 import StatCard from "./StatCard.jsx";
 import ProfileChart from "./ProfileChart.jsx";
@@ -11,7 +11,7 @@ const fmt = (x, d = 2) => (x == null || !Number.isFinite(x) ? "—" : x.toFixed(
 const METHOD_LABELS = { LMTD: "LMTD (diferencia media logarítmica)", NTU: "Efectividad – NTU" };
 const ic = { size: 12 };
 
-export default function ResultsPanel({ solution, incognita }) {
+export default function ResultsPanel({ solution, incognita, data }) {
   if (!solution) return null;
 
   if (solution.error) {
@@ -20,6 +20,23 @@ export default function ResultsPanel({ solution, incognita }) {
         <div className="hxs-section-title">
           <AlertCircle size={16} color="var(--bad)" /> No se pudo resolver del todo
         </div>
+        {solution.numeroTubosRequerido != null && (
+          <div className="hxs-alert hxs-alert-info">
+            Número de tubos necesario (según la velocidad máxima dada): <b>{solution.numeroTubosRequerido}</b> — esta
+            parte sí se pudo calcular aunque falten otros datos del intercambiador (ver detalle abajo).
+          </div>
+        )}
+        {(solution.fraccionPerdidaMedida != null || solution.eficienciaTransferenciaMedida != null) && (
+          <div className="hxs-alert hxs-alert-info">
+            {solution.fraccionPerdidaMedida != null && (
+              <>Fracción de pérdida de calor (medida): <b>{fmt(solution.fraccionPerdidaMedida * 100, 1)}%</b>. </>
+            )}
+            {solution.eficienciaTransferenciaMedida != null && (
+              <>Eficiencia de la transferencia (medida): <b>{fmt(solution.eficienciaTransferenciaMedida * 100, 1)}%</b>. </>
+            )}
+            Esta parte sí se pudo calcular comparando los dos balances de energía, aunque falten otros datos del intercambiador.
+          </div>
+        )}
         <div className="hxs-alert hxs-alert-error">
           <AlertCircle size={14} />
           {solution.error}
@@ -96,6 +113,26 @@ export default function ResultsPanel({ solution, incognita }) {
           {s.NTU != null && <StatCard icon={<Hash {...ic} />} label="NTU" value={fmt(s.NTU, 3)} />}
           {s.eps != null && <StatCard icon={<Percent {...ic} />} label="Efectividad, ε" value={fmt(s.eps * 100, 1)} unit="%" />}
           {s.C != null && <StatCard icon={<Scale {...ic} />} label="C = Cmín/Cmáx" value={fmt(s.C, 3)} />}
+          {s.numeroTubosRequerido != null && (
+            <StatCard icon={<Hash {...ic} />} label="Número de tubos necesario" value={s.numeroTubosRequerido} caption="para no exceder la velocidad máxima dada" />
+          )}
+          {s.fraccionPerdidaMedida != null && (
+            <StatCard
+              icon={<ShieldAlert {...ic} />}
+              label="Fracción de pérdida de calor (medida)"
+              value={fmt(s.fraccionPerdidaMedida * 100, 1)}
+              unit="%"
+              caption="comparando el balance de energía de ambos fluidos"
+            />
+          )}
+          {s.eficienciaTransferenciaMedida != null && (
+            <StatCard
+              icon={<Percent {...ic} />}
+              label="Eficiencia de la transferencia (medida)"
+              value={fmt(s.eficienciaTransferenciaMedida * 100, 1)}
+              unit="%"
+            />
+          )}
         </div>
 
         <hr className="hxs-divider" />
@@ -115,7 +152,7 @@ export default function ResultsPanel({ solution, incognita }) {
           />
         </div>
       </div>
-      <HeatExchangerSimulation solution={s} />
+      <HeatExchangerSimulation solution={s} data={data} />
       <ProfileChart solution={s} />
     </>
   );

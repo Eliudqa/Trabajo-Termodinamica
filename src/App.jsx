@@ -84,7 +84,7 @@ export default function App({ apiKey = DEFAULT_API_KEY } = {}) {
         {solution && (
           <>
             <div className="hxs-eyebrow" style={{ margin: "6px 0 12px" }}>Paso 3 · Solución</div>
-            <ResultsPanel solution={solution} incognita={editedData?.incognita_principal} />
+            <ResultsPanel solution={solution} incognita={editedData?.incognita_principal} data={editedData} />
           </>
         )}
       </div>

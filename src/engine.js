@@ -14,7 +14,7 @@
 // agotar el álgebra, todavía faltan las temperaturas de salida.
 // ============================================================
 
-import { internalTubeH, annulusH, externalCylinderH } from "./convection.js";
+import { internalTubeH, annulusH, externalCylinderH, getFluidProperties } from "./convection.js";
 
 export const isNum = (x) => x != null && Number.isFinite(x);
 
@@ -296,6 +296,30 @@ export function effectivenessFromNTU(configKey, NTU, C) {
       return (1 - e) / (1 - C * e);
     }
   }
+}
+
+/**
+ * Inversa numérica de la efectividad: dado un ε objetivo (p. ej. el enunciado
+ * dice directamente "con una efectividad de 0.65"), despeja el NTU que lo
+ * produce mediante bisección — no hay fórmula cerrada para varias
+ * configuraciones (cruzado no mezclado, coraza-tubos multipaso), así que se
+ * resuelve numéricamente en todos los casos por consistencia. ε(NTU) es
+ * monótonamente creciente en todas estas configuraciones, así que la
+ * bisección es segura.
+ */
+function invertEffectivenessToNTU(epsOfNTU, epsTarget, maxNTU = 50) {
+  if (!isNum(epsTarget) || epsTarget <= 0) return 0;
+  const epsAtMax = epsOfNTU(maxNTU);
+  if (!isNum(epsAtMax) || epsTarget > epsAtMax + 1e-6) return null; // no alcanzable en un NTU razonable
+  let lo = 0;
+  let hi = maxNTU;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    const e = epsOfNTU(mid);
+    if (!isNum(e) || e < epsTarget) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
 }
 
 // F de Underwood — exacto para 1 paso por la coraza, N pasos por los tubos (Fig. 11-18a del libro)
@@ -609,20 +633,123 @@ export function solveExchanger(data) {
   if (wallNote) warnings.push(wallNote);
   const Q_hot_direct = isNum(s.Ch) && isNum(s.Th_in) && isNum(s.Th_out) ? s.Ch * (s.Th_in - s.Th_out) : null;
   const Q_cold_direct = isNum(s.Cc) && isNum(s.Tc_in) && isNum(s.Tc_out) ? s.Cc * (s.Tc_out - s.Tc_in) : null;
+  // ------------------------------------------------------------
+  // Fracción de pérdida de calor y eficiencia de la transferencia MEDIDAS
+  // (Prob. 11-89b/c: "determine si el intercambiador en verdad es adiabático...
+  // determine la fracción de pérdida de calor y calcule la eficiencia de la
+  // transferencia de calor"). Distinto del lossFraction de arriba (que es un
+  // dato de ENTRADA, cuando el enunciado ya te dice cuánto se pierde): esto
+  // se DERIVA comparando los dos balances de energía medidos, cuando ambos
+  // fluidos tienen gasto másico/cp/temperaturas completos de forma
+  // independiente (no vienen de asumir el mismo Q para ambos).
+  // ------------------------------------------------------------
+  let medidoFraccionPerdida = null;
+  let medidoEficienciaTransferencia = null;
+  if (isNum(Q_hot_direct) && isNum(Q_cold_direct) && Q_hot_direct !== 0 && lossFraction === 0) {
+    medidoFraccionPerdida = (Q_hot_direct - Q_cold_direct) / Q_hot_direct;
+    medidoEficienciaTransferencia = Q_cold_direct / Q_hot_direct;
+  }
   if (Q_hot_direct != null && Q_cold_direct != null && lossFraction === 0) {
     if (Math.abs(Q_hot_direct - Q_cold_direct) / Math.max(Math.abs(Q_hot_direct), Math.abs(Q_cold_direct)) > 0.08) {
       warnings.push(
-        "Los balances de energía de los dos fluidos no coinciden bien (diferencia >8%); revisa los datos extraídos (¿el enunciado menciona pérdidas de calor que no se capturaron? corrige el campo correspondiente y recalcula)."
+        `Los balances de energía de los dos fluidos no coinciden bien (diferencia ≈${(Math.abs(medidoFraccionPerdida) * 100).toFixed(1)}%); si esto viene de datos MEDIDOS (no es un error de extracción), puede que el intercambiador no sea adiabático — revisa "Fracción de pérdida" y "Eficiencia de transferencia" en los resultados. Si en cambio es un error de extracción, revisa los datos (¿el enunciado menciona pérdidas de calor que no se capturaron? corrige el campo correspondiente y recalcula).`
       );
     }
   }
   s.Q_hot = Q_hot_direct;
   s.Q_cold = Q_cold_direct;
+  if (s.Q_hot == null && s.Q_cold == null && isNum(data.Q_dado_kW)) {
+    // Algunos ejercicios (p. ej. 11-116) dan la carga térmica DIRECTAMENTE
+    // como dato (no derivada de temperaturas/gastos), típicamente para un
+    // problema de diseño donde precisamente eso es lo único que se conoce.
+    s.Q_cold = data.Q_dado_kW * 1000;
+    warnings.push(`Se usó directamente la carga de transferencia de calor dada en el enunciado: Q=${data.Q_dado_kW} kW (no derivada de otros datos).`);
+  }
 
   warnings.push(...runPropagation(s, hot, cold, data, isParallel));
 
+  // ------------------------------------------------------------
+  // Diseño inverso: número de tubos necesario para que la velocidad del
+  // fluido del lado del tubo no exceda un límite dado (p. ej. Prob. 11-116:
+  // "la velocidad del agua no debe ser mayor a 3 m/s"). Se calcula aparte de
+  // LMTD/NTU porque solo depende del gasto másico de ESE fluido (ya
+  // despejado arriba por balance de energía) y su densidad — no necesita
+  // resolver el intercambiador completo, así que se expone incluso si el
+  // resto del problema queda incompleto (p. ej. si no se da la temperatura
+  // del vapor del otro lado, cosa que no hace falta para esta pregunta).
+  // ------------------------------------------------------------
+  let numeroTubosRequerido = null;
+  if (!isNum(data.numero_tubos) && isNum(data.velocidad_maxima_tubo_m_s) && isNum(D)) {
+    const tubeSideIsHot = data.fluido_por_tubo === "caliente";
+    const tubeSideIsCold = data.fluido_por_tubo === "frio";
+    const tubeFluid = tubeSideIsHot ? hot : tubeSideIsCold ? cold : null;
+    if (!tubeFluid) {
+      warnings.push("No se pudo calcular el número de tubos requerido: falta indicar cuál fluido va por el tubo interior (campo 'fluido_por_tubo').");
+    } else if (!isNum(tubeFluid.flujo_masico_kg_s)) {
+      warnings.push(`No se pudo calcular el número de tubos requerido: falta el gasto másico de ${tubeFluid.nombre || "el fluido del tubo"} (o datos suficientes para despejarlo por balance de energía).`);
+    } else if (!tubeFluid.tipo_fluido) {
+      warnings.push(`No se pudo calcular el número de tubos requerido: falta identificar el tipo de fluido de ${tubeFluid.nombre || "el fluido del tubo"} (agua/aire/etc.) para obtener su densidad.`);
+    } else {
+      const props = getFluidProperties(tubeFluid.tipo_fluido, meanTemp(tubeFluid));
+      if (!props) {
+        warnings.push(`No se pudo calcular el número de tubos requerido: no hay tabla de propiedades para "${tubeFluid.tipo_fluido}".`);
+      } else {
+        const A_tubo = (Math.PI / 4) * D * D;
+        const nExact = tubeFluid.flujo_masico_kg_s / (props.rho * data.velocidad_maxima_tubo_m_s * A_tubo);
+        numeroTubosRequerido = Math.ceil(nExact - 1e-9);
+        warnings.push(
+          `Número de tubos necesario para no exceder ${data.velocidad_maxima_tubo_m_s} m/s en el tubo (${tubeFluid.nombre || ""}): ${nExact.toFixed(2)} → se redondea hacia arriba a ${numeroTubosRequerido} tubos.`
+        );
+      }
+    }
+  }
+
   let method = "LMTD";
   let ntuInfo = null;
+
+  // --- Efectividad dada DIRECTAMENTE en el enunciado (p. ej. "con una
+  //     efectividad de 0.65"): si por eso falta As o U pero se conoce todo
+  //     lo demás (Cmin, Cmax, Th_in, Tc_in), invertimos ε(NTU) numéricamente
+  //     para despejar NTU, y de ahí As o U — el camino inverso al normal. ---
+  if (
+    isNum(data.efectividad_dada) &&
+    (s.As == null || s.U == null) &&
+    (isNum(s.Ch) || s.Ch === Infinity) &&
+    (isNum(s.Cc) || s.Cc === Infinity) &&
+    isNum(s.Th_in) &&
+    isNum(s.Tc_in) &&
+    !(s.Ch === Infinity && s.Cc === Infinity)
+  ) {
+    const Cmin = Math.min(s.Ch, s.Cc);
+    const Cmax = Math.max(s.Ch, s.Cc);
+    const C = Cmax === Infinity ? 0 : Cmin / Cmax;
+    const epsTarget = data.efectividad_dada;
+    const epsOfNTU = (ntu) => {
+      if (C === 0) return 1 - Math.exp(-ntu);
+      if (data.tipo_intercambiador === "tubos_coraza") return effectivenessTubosCorazaN(ntu, C, data.pasos_coraza ?? 1);
+      return effectivenessFromNTU(configKey, ntu, C);
+    };
+    const NTU_solved = invertEffectivenessToNTU(epsOfNTU, epsTarget);
+    if (NTU_solved == null) {
+      warnings.push(`La efectividad dada (${(epsTarget * 100).toFixed(1)}%) no parece alcanzable con esta configuración de flujo y estos gastos másicos; revisa los datos.`);
+    } else {
+      if (s.As == null && isNum(s.U)) {
+        s.As = (NTU_solved * Cmin) / s.U;
+        warnings.push(`Área despejada a partir de la efectividad dada (ε=${(epsTarget * 100).toFixed(1)}%): NTU=${NTU_solved.toFixed(3)} → As=${s.As.toFixed(3)} m².`);
+      } else if (s.U == null && isNum(s.As)) {
+        s.U = (NTU_solved * Cmin) / s.As;
+        warnings.push(`U despejado a partir de la efectividad dada (ε=${(epsTarget * 100).toFixed(1)}%): NTU=${NTU_solved.toFixed(3)} → U=${s.U.toFixed(1)} W/m²·°C.`);
+      }
+      const Qmax = Cmin * (s.Th_in - s.Tc_in);
+      const Qntu = epsTarget * Qmax;
+      if (s.Q_cold == null) s.Q_cold = Qntu;
+      if (s.Q_hot == null) s.Q_hot = lossFraction < 0.999 ? s.Q_cold / (1 - lossFraction) : s.Q_cold;
+      method = "NTU";
+      ntuInfo = { Cmin, Cmax, C, NTU: NTU_solved, eps: epsTarget };
+      warnings.push(...runPropagation(s, hot, cold, data, isParallel));
+    }
+  }
+
   const stillMissingSomething = s.Q_cold == null || !isNum(s.Th_in) || !isNum(s.Th_out) || !isNum(s.Tc_in) || !isNum(s.Tc_out);
 
   if (stillMissingSomething) {
@@ -677,7 +804,7 @@ export function solveExchanger(data) {
     } else if (!isNum(s.Th_in) || !isNum(s.Tc_in)) {
       hint = "Faltan las temperaturas de entrada de los fluidos.";
     }
-    return { method, warnings, error: hint, needsConvection, hot, cold, U: s.U, As: s.As };
+    return { method, warnings, error: hint, needsConvection, hot, cold, U: s.U, As: s.As, numeroTubosRequerido, fraccionPerdidaMedida: medidoFraccionPerdida, eficienciaTransferenciaMedida: medidoEficienciaTransferencia };
   }
 
   return {
@@ -705,5 +832,8 @@ export function solveExchanger(data) {
     configKey,
     isParallel,
     needsConvection,
+    numeroTubosRequerido,
+    fraccionPerdidaMedida: medidoFraccionPerdida,
+    eficienciaTransferenciaMedida: medidoEficienciaTransferencia,
   };
 }
