@@ -31,6 +31,7 @@ const FLUID_SCHEMA = {
     cambio_fase: { type: "boolean" },
     hfg_kJ_kg: { type: "number" },
     hfg_estimado: { type: "boolean" },
+    presion_kPa: { type: "number" },
   },
   required: ["nombre", "cambio_fase"],
   propertyOrdering: [
@@ -45,6 +46,7 @@ const FLUID_SCHEMA = {
     "cp_estimado",
     "hfg_kJ_kg",
     "hfg_estimado",
+    "presion_kPa",
   ],
 };
 
@@ -66,6 +68,8 @@ export const RESPONSE_SCHEMA = {
     Q_dado_kW: { type: "number" },
     efectividad_dada: { type: "number" },
     velocidad_maxima_tubo_m_s: { type: "number" },
+    area_frontal_ducto_m2: { type: "number" },
+    profundidad_tubos_m: { type: "number" },
     fluido_caliente: FLUID_SCHEMA,
     fluido_frio: FLUID_SCHEMA,
     coeficiente_U_W_m2C: { type: "number" },
@@ -117,6 +121,8 @@ export const RESPONSE_SCHEMA = {
     "velocidad_externa_m_s",
     "Q_dado_kW",
     "velocidad_maxima_tubo_m_s",
+    "area_frontal_ducto_m2",
+    "profundidad_tubos_m",
     "coeficiente_U_W_m2C",
     "hi",
     "ho",
@@ -143,7 +149,20 @@ REGLAS:
 5b. Si un fluido cambia de fase (cambio_fase=true) y el enunciado NO da directamente el valor de hfg, DEBES estimarlo tú mismo con tablas de vapor/líquido saturado según la sustancia y la temperatura de saturación (nunca lo dejes vacío si hay suficiente información para estimarlo). Para AGUA/VAPOR DE AGUA, usa estos valores de referencia de hfg (interpola linealmente entre los más cercanos si la temperatura no coincide exactamente): 0°C≈2501, 20°C≈2454, 40°C≈2406, 50°C≈2383, 60°C≈2359, 80°C≈2309, 100°C≈2257, 120°C≈2203, 150°C≈2114, 180°C≈2015, 200°C≈1941, 250°C≈1716 kJ/kg. Para amoniaco, refrigerantes u otras sustancias, usa el valor típico de hfg a esa temperatura según tablas de propiedades estándar. Marca hfg_estimado=true cuando lo hayas estimado así; hfg_estimado=false si el enunciado dio el valor explícitamente (o los datos suficientes para calcularlo sin tabla, p. ej. energía y masa).
 
 6. Convierte SIEMPRE a: temperaturas en °C; flujo másico en kg/s (kg/min÷60, kg/h÷3600, L/min de agua≈÷60 con densidad≈1000 kg/m³); velocidades en m/s (ft/s×0.3048); cp en kJ/kg·°C; U/hi/ho en W/m²·°C; longitudes/diámetros en m (in×0.0254, ft×0.3048); hfg en kJ/kg; incrustación en m²·°C/W.
+6a. UNIDADES INGLESAS/IMPERIALES (problemas marcados con "I" en el libro, p. ej. 11-27I, 11-49I, 11-58I, 11-66I, 11-95I, 11-103I, 11-127I) — usa estas fórmulas EXACTAS, no las aproximes de memoria:
+   - Temperatura: °C = (°F − 32) × 5/9. (¡Esto es una conversión de temperatura ABSOLUTA, no una diferencia! Si el enunciado da una DIFERENCIA de temperatura en °F, esa diferencia se convierte solo multiplicando por 5/9, sin restar 32.)
+   - Masa/gasto másico: kg = lbm × 0.4536. Por lo tanto lbm/s → kg/s ×0.4536; lbm/h → kg/s ×0.4536/3600 (≈×0.000126); lbm/min → kg/s ×0.4536/60.
+   - Calor específico: kJ/kg·°C = Btu/lbm·°F × 4.1868.
+   - Coeficiente de transferencia de calor (U, hi, ho): W/m²·°C = Btu/h·ft²·°F × 5.678.
+   - Calor latente (hfg): kJ/kg = Btu/lbm × 2.326.
+   - Razón de transferencia de calor: W = Btu/h × 0.2931 (para kW divide entre 1000 después); Btu/s × 1055.
+   - Longitud: m = ft × 0.3048 = in × 0.0254.
+   - Área: m² = ft² × 0.0929.
+   - Factor de incrustación (Rf): m²·°C/W = h·ft²·°F/Btu × 0.1761.
+   - Conductividad térmica (k): W/m·°C = Btu/h·ft·°F × 1.731.
+   Aplica estas SIEMPRE que el enunciado use unidades inglesas, sin importar si el problema tiene sufijo "I" o no. Registra en "notas" qué convertiste y con qué factor, para que el usuario pueda verificarlo.
 6b. GEOMETRÍA DEL TUBO — captúrala SIEMPRE que el enunciado la dé, sin importar si requiere_correlacion_convectiva es true o false (el motor necesita el diámetro para relacionar el área superficial As con la longitud del tubo, As=π·D·L·número_tubos, incluso cuando U ya viene dado directamente y no hace falta ninguna correlación de convección): captura diametro_interior y diametro_exterior en metros. Si el tubo es de PARED DELGADA y el enunciado da un solo diámetro (p. ej. "tubo de 2 cm de diámetro", sin distinguir interior/exterior), usa ese mismo valor en AMBOS campos. Si da los dos diámetros por separado, captura cada uno en su campo correspondiente.
+
 7. IMPORTANTE sobre longitud_m: cuando el enunciado dice algo como "la longitud de CADA PASO de los tubos es de X m", pon longitud_m=X y longitud_por_paso=true (el motor de cálculo se encarga de multiplicar por el número de pasos). Cuando el enunciado da la "longitud TOTAL de los tubos" directamente (p. ej. "la longitud total de los tubos en el intercambiador es de 60 m"), pon longitud_m=60 y longitud_por_paso=false. Si el intercambiador es de tubo doble (sin pasos), longitud_por_paso=false (o simplemente omítelo).
 8. Si el enunciado menciona que el intercambiador NO está bien aislado y se pierde cierto porcentaje del calor (p. ej. "se pierde 3% del calor liberado por el fluido caliente"), captura ese número en perdida_calor_porcentaje (como 3, no como 0.03). Si no se menciona ninguna pérdida, omite este campo (se asume aislamiento perfecto).
 9. Si el enunciado da hi y ho DIRECTAMENTE como números, captúralos y pon requiere_correlacion_convectiva=false. Si en cambio hay que calcular hi u ho mediante correlaciones de convección (Reynolds, Nusselt, Dittus-Boelter, Churchill-Bernstein, etc. — es decir, se dan velocidad/caudal y propiedades pero NO un valor de h), deja hi/ho sin definir y pon requiere_correlacion_convectiva=true. En este caso, para que el motor pueda calcular hi/ho automáticamente, captura TAMBIÉN:
@@ -163,9 +182,16 @@ REGLAS:
       b) Como una CAPA de depósito/incrustación (p. ej. "una capa de 2 mm de espesor de caliza, k=1.3 W/m·°C") de la que das espesor y conductividad por separado, NO un valor Rf ya combinado → captura por separado incrustacion_i_espesor_m + incrustacion_i_k_W_mC (si la capa está en el lado interior/tubo) o incrustacion_o_espesor_m + incrustacion_o_k_W_mC (si está en el lado exterior/coraza). El motor de cálculo hace la división espesor/k automáticamente, no la hagas tú.
     Nunca captures ambos formatos para el mismo lado a la vez; usa el que el enunciado realmente da.
 13. Problemas de DISEÑO INVERSO (piden dimensionar algo, no solo evaluar un intercambiador ya definido):
-    - Si el enunciado da la razón/carga de transferencia de calor DIRECTAMENTE como un dato (p. ej. "la carga de transferencia de calor del calentador es de 600 kW"), y NO se puede derivar de otra forma más directa (gastos másicos y temperaturas de ambos fluidos), captúrala en Q_dado_kW (convertida a kW si hace falta, p. ej. Btu/h × 0.000293).
+    - Si el enunciado da la razón/carga de transferencia de calor DIRECTAMENTE como un dato (p. ej. "la carga de transferencia de calor del calentador es de 600 kW", "el condensador debe eliminar 500 MW de calor"), y NO se puede derivar de otra forma más directa (gastos másicos y temperaturas de ambos fluidos), captúrala en Q_dado_kW SIEMPRE en kW (convertida si hace falta: MW×1000, Btu/h×0.0002931, Btu/s×1.055). Ojo con MW especialmente: 500 MW = 500 000 kW, no 500.
     - Si el enunciado da la EFECTIVIDAD del intercambiador DIRECTAMENTE como dato (p. ej. "con una efectividad de 0.65", "la efectividad es 65%"), captúrala en efectividad_dada como decimal entre 0 y 1 (0.65, no 65). Esto es distinto de cuando la efectividad es la INCÓGNITA a calcular — solo llena este campo cuando el enunciado la da como un dato conocido de entrada, no cuando la pide como resultado.
     - Si el enunciado pide encontrar CUÁNTOS TUBOS se necesitan dado un límite de velocidad (p. ej. "si el diámetro interior de los tubos es de 1 cm y la velocidad del agua no debe ser mayor a 3 m/s, determine cuántos tubos es necesario usar"), captura ese límite en velocidad_maxima_tubo_m_s (convertida a m/s) y NO captures numero_tubos (precisamente es la incógnita) — el motor lo calcula a partir del gasto másico del fluido del tubo, su densidad, el diámetro interior y esta velocidad máxima. Asegúrate de capturar también fluido_por_tubo para este caso (cuál de los dos fluidos es el que circula por dentro de los tubos), aun si el enunciado no requiere correlación convectiva.
+14. BANCO DE TUBOS EN FLUJO CRUZADO DENTRO DE UN DUCTO/CANAL (tipo_intercambiador="flujo_cruzado" con numero_tubos, SIN aletas, p. ej. "N tubos de D cm ubicados en un ducto de sección transversal A×B, por dentro de los tubos entra un fluido a V m/s, por el ducto entra el otro fluido a V' m/s"): aquí NINGUNO de los dos fluidos suele dar gasto másico directo, solo velocidades — el motor necesita geometría para convertir velocidad→gasto másico en AMBOS lados, así que captura TODO esto sin importar el valor de requiere_correlacion_convectiva (puede ser false si U ya viene dado):
+    - fluido_por_tubo: "caliente" o "frio", cuál de los dos fluidos va POR DENTRO de los tubos (el otro fluye por fuera, a través del ducto, perpendicular a los tubos).
+    - diametro_interior (y diametro_exterior si el tubo es de pared delgada, igual que en la regla 6b) del tubo, y numero_tubos.
+    - velocidad_m_s de CADA fluido que la dé el enunciado como velocidad (no como gasto másico), dentro de su propio objeto fluido_caliente/fluido_frio.
+    - area_frontal_ducto_m2: el área de la sección transversal del ducto ANTES de descontar el bloqueo de los tubos (p. ej. "sección transversal de 1 m × 1 m" → 1). Es el área por la que entra el fluido que va POR FUERA de los tubos.
+    - profundidad_tubos_m: la longitud de cada tubo expuesta al fluido que cruza por fuera (normalmente el otro lado de esa misma sección transversal del ducto, p. ej. si el ducto es de 1 m × 1 m, profundidad_tubos_m=1). El motor calcula el área LIBRE de paso de ese fluido como area_frontal_ducto_m2 − numero_tubos×diametro_exterior×profundidad_tubos_m (el área que bloquean los tubos vistos de frente).
+    - Si el fluido que va por fuera de los tubos es un GAS (aire) y el enunciado da su PRESIÓN (p. ej. "aire a 130°C y 105 kPa" — nota que 105 kPa NO es la presión atmosférica estándar de 101.325 kPa), captura esa presión en presion_kPa dentro del objeto de ese fluido — el motor la necesita para corregir la densidad del gas (a mayor presión, mayor densidad, proporcionalmente). Si el enunciado no menciona presión o el fluido es un líquido, omite este campo.
 
 Responde ÚNICAMENTE con el JSON, sin texto adicional.
 

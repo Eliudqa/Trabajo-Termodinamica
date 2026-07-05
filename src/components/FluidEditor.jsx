@@ -22,6 +22,10 @@ export default function FluidEditor({ title, icon, tone, fluid, onChange, needsC
   // extracción) — en el resto de ejercicios son ruido innecesario.
   const showTipoFluido = !!needsConvection || hasVal(fluid.tipo_fluido);
   const showVelocidad = !!needsConvection || hasVal(fluid.velocidad_m_s);
+  // La presión solo importa para GASES (su densidad depende de ella) y solo
+  // en el mismo contexto donde ya pedimos velocidad (banco de tubos en un
+  // ducto, o correlación convectiva) — para líquidos no se muestra nunca.
+  const showPresion = fluid.tipo_fluido === "aire" && (showVelocidad || hasVal(fluid.presion_kPa));
 
   return (
     <div className={`hxs-fluid-card ${tone === "hot" ? "hxs-fluid-hot" : "hxs-fluid-cold"}`}>
@@ -62,9 +66,20 @@ export default function FluidEditor({ title, icon, tone, fluid, onChange, needsC
           <NumField label="Gasto másico" suffix="kg/s" value={fluid.flujo_masico_kg_s} onChange={(v) => set("flujo_masico_kg_s", v)} />
           <NumField label="cp" suffix="kJ/kg·°C" value={fluid.cp_kJ_kgC} onChange={(v) => set("cp_kJ_kgC", v)} />
           {showVelocidad && (
-            <NumField label="Velocidad (si va por el tubo)" suffix="m/s" value={fluid.velocidad_m_s} onChange={(v) => set("velocidad_m_s", v)} />
+            <NumField label="Velocidad (si va por el tubo, o del fluido en el ducto)" suffix="m/s" value={fluid.velocidad_m_s} onChange={(v) => set("velocidad_m_s", v)} />
           )}
         </div>
+      )}
+      {showPresion && (
+        <div className="hxs-row">
+          <NumField label="Presión" suffix="kPa" value={fluid.presion_kPa} onChange={(v) => set("presion_kPa", v)} />
+        </div>
+      )}
+      {showPresion && (
+        <p style={{ fontSize: 11, color: "var(--ink-dim)", margin: "-6px 0 9px", lineHeight: 1.5, display: "flex", gap: 4 }}>
+          <Info size={11} style={{ flexShrink: 0, marginTop: 2 }} />
+          Solo hace falta si no está a la presión atmosférica estándar (~101.3 kPa) — el motor la usa para corregir la densidad del gas.
+        </p>
       )}
       {fluid.cp_estimado && !fluid.cambio_fase && (
         <div style={{ fontSize: 11, color: "var(--ink-dim)", marginTop: -4, display: "flex", gap: 4 }}>

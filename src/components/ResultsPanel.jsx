@@ -5,13 +5,12 @@ import {
 import StatCard from "./StatCard.jsx";
 import ProfileChart from "./ProfileChart.jsx";
 import AnswerCard from "./AnswerCard.jsx";
-import HeatExchangerSimulation from "./HeatExchangerSimulation.jsx";
 
 const fmt = (x, d = 2) => (x == null || !Number.isFinite(x) ? "—" : x.toFixed(d));
 const METHOD_LABELS = { LMTD: "LMTD (diferencia media logarítmica)", NTU: "Efectividad – NTU" };
 const ic = { size: 12 };
 
-export default function ResultsPanel({ solution, incognita, data }) {
+export default function ResultsPanel({ solution, incognita }) {
   if (!solution) return null;
 
   if (solution.error) {
@@ -152,7 +151,6 @@ export default function ResultsPanel({ solution, incognita, data }) {
           />
         </div>
       </div>
-      <HeatExchangerSimulation solution={s} data={data} />
       <ProfileChart solution={s} />
     </>
   );

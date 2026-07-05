@@ -339,6 +339,40 @@ export function correctionFactorF(P, R) {
   return Math.min(F, 1);
 }
 
+/**
+ * Extiende la F de Underwood a N pasos por la coraza (2, 4, 6...), método
+ * Bowman-Mueller-Nagle: convierte la P "global" del intercambiador completo
+ * a la P equivalente de UN solo paso de coraza (P1) — la R no cambia entre
+ * pasos — y evalúa la fórmula de 1-paso de siempre con esa P1.
+ *   X = ((1 - P·R) / (1 - P))^(1/N)          (R ≠ 1)
+ *   P1 = (X - 1) / (X - R)
+ *   P1 = P / (N - (N-1)·P)                    (caso especial R = 1)
+ * Antes de este fix, el motor simplemente asumía F=1 para cualquier N>1
+ * (una aproximación demasiado burda: para el Prob. 11-63 del libro, por
+ * ejemplo, daba As=10.61 m² en vez de los ~11.4-11.5 m² correctos).
+ */
+export function correctionFactorFNShells(P, R, N) {
+  const n = N ?? 1;
+  if (n <= 1) return correctionFactorF(P, R);
+  if (P == null || R == null || P <= 0) return 1;
+  if (P >= 1) return null;
+  let P1;
+  if (Math.abs(R - 1) < 1e-6) {
+    const denom = n - (n - 1) * P;
+    if (denom <= 0) return null;
+    P1 = P / denom;
+  } else {
+    const base = (1 - P * R) / (1 - P);
+    if (base <= 0) return null;
+    const X = Math.pow(base, 1 / n);
+    const denom = X - R;
+    if (Math.abs(denom) < 1e-12) return null;
+    P1 = (X - 1) / denom;
+  }
+  if (!Number.isFinite(P1) || P1 <= 0 || P1 >= 1) return null;
+  return correctionFactorF(P1, R);
+}
+
 export function generateProfile(isParallel, Th_in, Th_out, Tc_in, Tc_out, Ch, Cc, Q, N = 30) {
   const points = [];
   const dT1 = isParallel ? Th_in - Tc_in : Th_in - Tc_out;
@@ -372,15 +406,13 @@ function computeCorrectionFactor(tipo, pasosCoraza, isParallel, Th_in, Th_out, T
   if (tipo === "tubo_doble" || !tipo) return { F: 1, warning: null };
   const P = (Tc_out - Tc_in) / (Th_in - Tc_in);
   const R = (Th_in - Th_out) / (Tc_out - Tc_in);
-  if (tipo === "tubos_coraza" && (pasosCoraza ?? 1) === 1) {
-    const Fcalc = correctionFactorF(P, R);
-    if (Fcalc) return { F: Fcalc, warning: null };
-    return { F: 1, warning: "No se pudo calcular F automáticamente; se asumió F=1 (verifica la Figura 11-18)." };
-  }
   if (tipo === "tubos_coraza") {
+    const N = pasosCoraza ?? 1;
+    const Fcalc = correctionFactorFNShells(P, R, N);
+    if (Fcalc) return { F: Fcalc, warning: null };
     return {
       F: 1,
-      warning: "Configuración multipasos (más de 1 paso por la coraza): F se aproximó como 1 — la fórmula exacta de Underwood solo cubre 1 paso por la coraza. Verifica la Figura 11-18 del libro.",
+      warning: `No se pudo calcular F automáticamente para ${N} paso(s) por la coraza (caso fuera del rango de la fórmula); se asumió F=1 — verifica la Figura 11-18 del libro.`,
     };
   }
   // flujo_cruzado

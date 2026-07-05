@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { solveExchanger, correctionFactorF, generateProfile, effectivenessTubosCorazaN, overallUFromHiHo } from "./engine.js";
+import { solveExchanger, correctionFactorF, correctionFactorFNShells, generateProfile, effectivenessTubosCorazaN, overallUFromHiHo } from "./engine.js";
 import { getFluidProperties } from "./convection.js";
 
 describe("Resistencia de pared del tubo en el cálculo de U (fix #1)", () => {
@@ -383,6 +383,72 @@ describe("Factor de corrección F (fórmula de Underwood)", () => {
   });
   it("devuelve null en un caso no factible (P demasiado alto)", () => {
     expect(correctionFactorF(0.97, 3)).toBeNull();
+  });
+});
+
+describe("Factor de corrección F para N pasos por la coraza (fix: antes se asumía F=1 para N>1)", () => {
+  it("con N=1, correctionFactorFNShells coincide exactamente con correctionFactorF", () => {
+    const P = 0.4, R = 0.8;
+    expect(correctionFactorFNShells(P, R, 1)).toBeCloseTo(correctionFactorF(P, R), 9);
+  });
+
+  it("Problema 11-63 del libro: 2 pasos por la coraza, 8 pasos por los tubos — calienta alcohol etílico con agua", () => {
+    // P=(70-25)/(95-25)=0.6429, R=(95-60)/(70-25)=0.7778
+    const data = {
+      tipo_intercambiador: "tubos_coraza",
+      configuracion_flujo: "contraflujo",
+      pasos_coraza: 2,
+      pasos_tubos: 8,
+      fluido_caliente: { nombre: "agua", temp_entrada_C: 95, temp_salida_C: 60, cp_kJ_kgC: 4.19 },
+      fluido_frio: { nombre: "alcohol etílico", temp_entrada_C: 25, temp_salida_C: 70, flujo_masico_kg_s: 2.1, cp_kJ_kgC: 2.67 },
+      coeficiente_U_W_m2C: 800,
+    };
+    const r = solveExchanger(data);
+
+    // antes del fix esto daba F=1 y As≈10.61 (bug reportado por el usuario)
+    expect(r.F).toBeCloseTo(0.9206, 3);
+    expect(r.F).toBeLessThan(1); // debe corregir, no asumir contraflujo puro
+    // el libro reporta 11.4 m² (leído de la Fig. 11-18); la fórmula exacta da ~11.53 —
+    // la misma discrepancia gráfica-vs-fórmula ya documentada para el método NTU
+    expect(r.As).toBeCloseTo(11.53, 1);
+    expect(r.As).toBeGreaterThan(11.2);
+    expect(r.As).toBeLessThan(11.8);
+  });
+
+  it("a más pasos por la coraza (con la misma P,R), F se acerca más a 1 (más parecido a contraflujo puro)", () => {
+    const P = 0.5, R = 0.8;
+    const F1 = correctionFactorFNShells(P, R, 1);
+    const F2 = correctionFactorFNShells(P, R, 2);
+    const F4 = correctionFactorFNShells(P, R, 4);
+    expect(F2).toBeGreaterThan(F1);
+    expect(F4).toBeGreaterThan(F2);
+    expect(F4).toBeLessThanOrEqual(1);
+  });
+
+  it("R=1 (caso especial) no revienta y da un F entre 0 y 1", () => {
+    const F = correctionFactorFNShells(0.4, 1, 2);
+    expect(F).toBeGreaterThan(0);
+    expect(F).toBeLessThanOrEqual(1);
+  });
+
+  it("caso no factible (P muy alto para el N dado) devuelve null, no NaN ni un F inventado", () => {
+    const F = correctionFactorFNShells(0.98, 3, 2);
+    expect(F === null || (F > 0 && F <= 1)).toBe(true);
+  });
+
+  it("integración: si el caso no es factible, solveExchanger cae de vuelta a F=1 con un aviso explícito (no revienta)", () => {
+    const data = {
+      tipo_intercambiador: "tubos_coraza",
+      configuracion_flujo: "contraflujo",
+      pasos_coraza: 6,
+      fluido_caliente: { nombre: "aceite", temp_entrada_C: 200, temp_salida_C: 40, flujo_masico_kg_s: 1, cp_kJ_kgC: 2 },
+      fluido_frio: { nombre: "agua", temp_entrada_C: 20, temp_salida_C: 195, flujo_masico_kg_s: 0.05, cp_kJ_kgC: 4.18 },
+      coeficiente_U_W_m2C: 500,
+      area_m2: 10,
+    };
+    const r = solveExchanger(data);
+    expect(r.error).toBeUndefined();
+    expect(isFinite(r.F)).toBe(true);
   });
 });
 

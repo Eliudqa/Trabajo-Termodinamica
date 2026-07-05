@@ -93,6 +93,24 @@ export function getFluidProperties(tipoFluido, tempC) {
   };
 }
 
+/**
+ * Densidad de un fluido a una presión distinta de la atmosférica estándar
+ * (~101.325 kPa, que es a la que están referidas las tablas de arriba).
+ * Solo es relevante para GASES (el aire, por ahora — el único gas tabulado
+ * en este módulo): a temperatura constante, la densidad de un gas ideal es
+ * directamente proporcional a la presión (ρ = P/RT → ρ2/ρ1 = P2/P1), así
+ * que basta con escalar la densidad de tabla por esa razón. Para líquidos
+ * (agua, aceite, etilenglicol) la presión no afecta la densidad de forma
+ * apreciable en el rango de estos ejercicios, así que se ignora.
+ */
+const ATM_KPA = 101.325;
+export function densityAtPressure(tipoFluido, tempC, presionKPa) {
+  const props = getFluidProperties(tipoFluido, tempC);
+  if (!props) return null;
+  if (!isNum(presionKPa) || tipoFluido !== "aire") return props.rho;
+  return props.rho * (presionKPa / ATM_KPA);
+}
+
 function nusseltDittusBoelter(Re, Pr, heating) {
   if (Re < 2300) return { Nu: 3.66, regime: "laminar" };
   const n = heating ? 0.4 : 0.3;

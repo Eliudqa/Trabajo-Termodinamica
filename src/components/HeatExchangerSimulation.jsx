@@ -153,8 +153,8 @@ export default function HeatExchangerSimulation({ solution, data }) {
   const layout = useMemo(() => {
     if (!s || s.error) return null;
     if (tipoEfectivo === "flujo_cruzado") return "cruzado";
-    if (tipoEfectivo === "tubos_coraza") return "coraza";
-    return "lineal";
+    return "coraza"; // tubo_doble y tubos_coraza comparten el mismo renderizador:
+    // un tubo doble ES un intercambiador de coraza-y-tubo de un solo paso.
   }, [s, tipoEfectivo]);
 
   if (!s || s.error || !layout) return null;
@@ -162,13 +162,14 @@ export default function HeatExchangerSimulation({ solution, data }) {
   const hotName = s.hot?.nombre || "Fluido caliente";
   const coldName = s.cold?.nombre || "Fluido frío";
   const W = 720;
+  const isDoubleTube = tipoEfectivo === "tubo_doble";
 
   const badgeParts = [];
-  if (s.configKey === "paralelo") badgeParts.push("Flujo paralelo");
-  else if (s.configKey === "contraflujo") badgeParts.push("Contraflujo");
-  else if (layout === "coraza") badgeParts.push("Coraza y tubos");
+  if (layout === "coraza") badgeParts.push(isDoubleTube ? "Tubo doble" : "Coraza y tubos");
   else if (layout === "cruzado") badgeParts.push("Flujo cruzado");
-  if (layout === "coraza") {
+  if (s.configKey === "paralelo") badgeParts.push("Flujo paralelo");
+  else if (s.configKey === "contraflujo" || s.configKey === "tubos_coraza_1paso") badgeParts.push("Contraflujo");
+  if (layout === "coraza" && !isDoubleTube) {
     if (isNum(data?.pasos_tubos) && data.pasos_tubos > 1) badgeParts.push(`${Math.round(data.pasos_tubos)} pasos/tubos`);
     if (isNum(data?.pasos_coraza) && data.pasos_coraza > 1) badgeParts.push(`${Math.round(data.pasos_coraza)} pasos/coraza`);
   }
@@ -183,90 +184,81 @@ export default function HeatExchangerSimulation({ solution, data }) {
   const tubeColor = tubeIsHot ? "var(--copper)" : "var(--steel)";
   const shellColor = tubeIsHot ? "var(--steel)" : "var(--copper)";
   const tubeTint = tubeIsHot ? TINT.copper : TINT.steel;
-  const tubeAssignmentGuessed = layout === "coraza" && !data?.fluido_por_tubo;
+  const shellTint = tubeIsHot ? TINT.steel : TINT.copper;
+  const tubeAssignmentGuessed = !data?.fluido_por_tubo;
 
   let H = 240;
   let content = null;
 
-  if (layout === "lineal") {
-    const padX = 64;
-    const yHot = 74, yCold = H - 74;
-    const [hotC0, hotC1] = gradientEnds(s.Th_in, s.Th_out, "var(--copper)", TINT.copper);
-    const coldStart = s.isParallel ? s.Tc_in : s.Tc_out;
-    const coldEnd = s.isParallel ? s.Tc_out : s.Tc_in;
-    const [coldC0, coldC1] = gradientEnds(coldStart, coldEnd, "var(--steel)", TINT.steel);
-    const hotPathD = `M ${padX},${yHot} L ${W - padX},${yHot}`;
-    const coldPathD = s.isParallel ? `M ${padX},${yCold} L ${W - padX},${yCold}` : `M ${W - padX},${yCold} L ${padX},${yCold}`;
-
-    content = (
-      <>
-        <linearGradient id={`hotgrad-${uid}`} x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor={hotC0} />
-          <stop offset="100%" stopColor={hotC1} />
-        </linearGradient>
-        <linearGradient id={`coldgrad-${uid}`} x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor={coldC0} />
-          <stop offset="100%" stopColor={coldC1} />
-        </linearGradient>
-
-        <path d={hotPathD} fill="none" stroke={`url(#hotgrad-${uid})`} strokeWidth={16} strokeLinecap="round" />
-        <FlowArrows pathD={hotPathD} count={4} duration={4.2} color="var(--copper)" />
-        <ArrowHead x={padX + 16} y={yHot} dir="right" color="var(--copper)" size={8.5} />
-        <ArrowHead x={W - padX - 16} y={yHot} dir="right" color="var(--copper)" size={8.5} />
-
-        <path d={coldPathD} fill="none" stroke={`url(#coldgrad-${uid})`} strokeWidth={16} strokeLinecap="round" />
-        <FlowArrows pathD={coldPathD} count={4} duration={4.6} color="var(--steel)" />
-        <ArrowHead x={s.isParallel ? padX + 16 : W - padX - 16} y={yCold} dir={s.isParallel ? "right" : "left"} color="var(--steel)" size={8.5} />
-        <ArrowHead x={s.isParallel ? W - padX - 16 : padX + 16} y={yCold} dir={s.isParallel ? "right" : "left"} color="var(--steel)" size={8.5} />
-
-        <StackedLabel x={padX} y={32} lines={fluidLines(s.hot, s.Th_in, s.hot?.flujo_masico_kg_s)} />
-        <StackedLabel x={W - padX} y={32} anchor="end" lines={[`${fmt(s.Th_out)}°C`]} />
-        <StackedLabel x={s.isParallel ? padX : W - padX} y={H - 8} anchor={s.isParallel ? "start" : "end"} lines={fluidLines(s.cold, s.Tc_in, s.cold?.flujo_masico_kg_s)} />
-        <StackedLabel x={s.isParallel ? W - padX : padX} y={H - 8} anchor={s.isParallel ? "end" : "start"} lines={[`${fmt(s.Tc_out)}°C`]} />
-      </>
-    );
-  }
-
   if (layout === "cruzado") {
-    const [hotC0, hotC1] = gradientEnds(s.Th_in, s.Th_out, "var(--copper)", TINT.copper);
-    const [coldC0, coldC1] = gradientEnds(s.Tc_in, s.Tc_out, "var(--steel)", TINT.steel);
-    const hotPathD = `M ${64},${H / 2} L ${W - 64},${H / 2}`;
+    const casingX = 150, casingW = W - 300, casingH = 140;
+    const colTopOuter = 74;
+    const casingY = colTopOuter + 56;
+    const colBottomOuter = casingY + casingH + 56;
+    H = colBottomOuter + 60;
+    const nTubes = 4;
+    const tubeYs = Array.from({ length: nTubes }, (_, i) => casingY + 24 + i * ((casingH - 48) / (nTubes - 1)));
+    const xLeftOuter = 64, xRightOuter = W - 64;
+    const colXs = [0.25, 0.5, 0.75].map((f) => casingX + f * casingW);
+
+    const [tubeC0, tubeC1] = gradientEnds(tubeTempIn, tubeTempOut, tubeColor, tubeTint);
+    const [shellC0, shellC1] = gradientEnds(shellTempIn, shellTempOut, shellColor, shellTint);
+    const condensing = isCondensingExit(shellFluid, shellTempOut);
 
     content = (
       <>
-        <linearGradient id={`hotgrad-${uid}`} x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor={hotC0} />
-          <stop offset="100%" stopColor={hotC1} />
+        <linearGradient id={`tubegrad-${uid}`} x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0%" stopColor={tubeC0} />
+          <stop offset="100%" stopColor={tubeC1} />
         </linearGradient>
-        <linearGradient id={`coldgrad-v-${uid}`} x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor={coldC0} />
-          <stop offset="100%" stopColor={coldC1} />
+        <linearGradient id={`shellgrad-v-${uid}`} x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor={shellC0} />
+          <stop offset="100%" stopColor={shellC1} />
         </linearGradient>
 
-        <path d={hotPathD} fill="none" stroke={`url(#hotgrad-${uid})`} strokeWidth={16} strokeLinecap="round" />
-        <FlowArrows pathD={hotPathD} count={4} duration={4.2} color="var(--copper)" />
-        <ArrowHead x={80} y={H / 2} dir="right" color="var(--copper)" size={8.5} />
-        <ArrowHead x={W - 80} y={H / 2} dir="right" color="var(--copper)" size={8.5} />
+        {/* carcasa sólida — mismo lenguaje visual que la coraza y tubos */}
+        <rect x={casingX} y={casingY} width={casingW} height={casingH} rx={22} fill="#2C3138" stroke="#4A525C" strokeWidth={5} />
+        <rect x={casingX + 6} y={casingY + 6} width={casingW - 12} height={casingH - 12} rx={17} fill="none" stroke="#383F48" strokeWidth={2} opacity={0.7} />
 
-        {[0.28, 0.5, 0.72].map((f, i) => {
-          const x = 64 + f * (W - 128);
-          const pathD = `M ${x},${20} L ${x},${H - 20}`;
+        {/* banco de tubos — el fluido que va POR DENTRO de los tubos */}
+        {tubeYs.map((y, i) => {
+          const p = `M ${xLeftOuter},${y} L ${xRightOuter},${y}`;
           return (
             <g key={i}>
-              <path d={pathD} fill="none" stroke={`url(#coldgrad-v-${uid})`} strokeWidth={10} strokeLinecap="round" opacity={0.85} />
-              <FlowArrows pathD={pathD} count={2} duration={3} color="var(--steel)" size={6.5} />
+              <path d={p} fill="none" stroke={`url(#tubegrad-${uid})`} strokeWidth={9} strokeLinecap="round" />
+              <FlowArrows pathD={p} count={3} duration={4} color={tubeColor} size={6} />
             </g>
           );
         })}
+        <ArrowHead x={xLeftOuter + 13} y={tubeYs[0]} dir="right" color={tubeColor} size={7.5} />
+        <ArrowHead x={xRightOuter - 13} y={tubeYs[0]} dir="right" color={tubeColor} size={7.5} />
+        <StackedLabel x={xLeftOuter} y={tubeYs[0] - 42} lines={fluidLines(tubeFluid, tubeTempIn, tubeFluid?.flujo_masico_kg_s)} />
+        <StackedLabel x={xRightOuter} y={tubeYs[0] - 42} anchor="end" lines={[`${fmt(tubeTempOut)}°C`]} />
 
-        <StackedLabel x={64} y={H / 2 - 36} lines={fluidLines(s.hot, s.Th_in, s.hot?.flujo_masico_kg_s).concat(isNum(s.Th_out) ? [`→ ${fmt(s.Th_out)}°C`] : [])} />
-        <StackedLabel x={64} y={18} lines={fluidLines(s.cold, s.Tc_in, s.cold?.flujo_masico_kg_s).concat(isNum(s.Tc_out) ? [`→ ${fmt(s.Tc_out)}°C (cruzado)`] : ["(cruzado)"])} />
+        {/* fluido cruzado — pasa perpendicular, por FUERA de los tubos */}
+        {colXs.map((x, i) => {
+          const p = `M ${x},${colTopOuter} L ${x},${colBottomOuter}`;
+          return (
+            <g key={i}>
+              <path d={p} fill="none" stroke={`url(#shellgrad-v-${uid})`} strokeWidth={8} strokeLinecap="round" opacity={0.9} />
+              <FlowArrows pathD={p} count={2} duration={2.6} color={shellColor} size={6.5} fadeIn={i === 1} fadeOut={i === 1} />
+            </g>
+          );
+        })}
+        <ArrowHead x={colXs[1]} y={casingY - 6} dir="down" color={shellColor} size={7.5} />
+        <ArrowHead x={colXs[1]} y={casingY + casingH + 44} dir="down" color={shellColor} size={7.5} />
+        <StackedLabel x={colXs[1]} y={12} anchor="middle" lines={fluidLines(shellFluid, shellTempIn, shellFluid?.flujo_masico_kg_s)} />
+        {condensing ? (
+          <CondensateMark x={colXs[1]} y={colBottomOuter + 20} />
+        ) : (
+          <StackedLabel x={colXs[1]} y={colBottomOuter + 34} anchor="middle" lines={[`${fmt(shellTempOut)}°C`]} />
+        )}
       </>
     );
   }
 
   if (layout === "coraza") {
-    const truePasses = isNum(data?.pasos_tubos) && data.pasos_tubos > 0 ? Math.round(data.pasos_tubos) : 1;
+    const truePasses = isDoubleTube ? 1 : isNum(data?.pasos_tubos) && data.pasos_tubos > 0 ? Math.round(data.pasos_tubos) : 1;
     const maxDrawn = 5;
     const visualPasses = truePasses > maxDrawn ? (truePasses % 2 === 0 ? 4 : 5) : truePasses;
     const simplified = visualPasses !== truePasses;

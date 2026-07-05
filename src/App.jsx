@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
 import "./theme.css";
 import Header from "./components/Header.jsx";
+import TopBar from "./components/TopBar.jsx";
 import ProblemForm from "./components/ProblemForm.jsx";
 import DataPanel from "./components/DataPanel.jsx";
 import ResultsPanel from "./components/ResultsPanel.jsx";
+import HeatExchangerSimulation from "./components/HeatExchangerSimulation.jsx";
 import { solveExchanger } from "./engine.js";
 import { extractWithGemini } from "./extraction.js";
+import { Compass } from "lucide-react";
 
 const LS_KEY_SESSION = "hxs.lastSession";
 const DEFAULT_API_KEY = import.meta.env?.VITE_GEMINI_API_KEY || "";
@@ -65,27 +68,60 @@ export default function App({ apiKey = DEFAULT_API_KEY } = {}) {
     persistSession(problemText, editedData);
   }, [editedData, problemText, persistSession]);
 
+  const scrollToSection = useCallback((id) => {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
   return (
     <div className="hxs-root">
-      <div className="hxs-shell">
+      <TopBar onNavigate={scrollToSection} problemText={problemText} editedData={editedData} solution={solution} />
+
+      <div className={`hxs-shell ${editedData ? "hxs-shell-wide" : ""}`}>
         <Header />
 
-        <ProblemForm
-          problemText={problemText}
-          onChangeText={setProblemText}
-          onSolve={handleSolve}
-          status={status}
-          errorMsg={errorMsg}
-          hasApiKey={!!apiKey}
-        />
+        <div className="hxs-workspace">
+          <div className="hxs-col-left">
+            <section id="sec-enunciado">
+              <ProblemForm
+                problemText={problemText}
+                onChangeText={setProblemText}
+                onSolve={handleSolve}
+                status={status}
+                errorMsg={errorMsg}
+                hasApiKey={!!apiKey}
+              />
+            </section>
 
-        {editedData && <DataPanel data={editedData} onChange={setEditedData} onRecalculate={handleRecalculate} />}
+            {editedData && (
+              <section id="sec-datos">
+                <DataPanel data={editedData} onChange={setEditedData} onRecalculate={handleRecalculate} />
+              </section>
+            )}
+          </div>
 
-        {solution && (
-          <>
-            <div className="hxs-eyebrow" style={{ margin: "6px 0 12px" }}>Paso 3 · Solución</div>
-            <ResultsPanel solution={solution} incognita={editedData?.incognita_principal} data={editedData} />
-          </>
+          <div className="hxs-col-right">
+            <section id="sec-solucion">
+              {solution ? (
+                <>
+                  <div className="hxs-eyebrow" style={{ margin: "6px 0 12px" }}>Paso 3 · Solución</div>
+                  <ResultsPanel solution={solution} incognita={editedData?.incognita_principal} />
+                </>
+              ) : (
+                <div className="hxs-card hxs-empty-results">
+                  <Compass size={22} color="var(--ink-faint)" />
+                  <p>Aquí va a aparecer la solución en cuanto resuelvas un enunciado.</p>
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+
+        {solution && !solution.error && (
+          <section id="sec-simulacion" className="hxs-sim-full">
+            <div className="hxs-eyebrow" style={{ margin: "26px 0 12px" }}>Paso 4 · Simulación</div>
+            <HeatExchangerSimulation solution={solution} data={editedData} />
+          </section>
         )}
       </div>
     </div>

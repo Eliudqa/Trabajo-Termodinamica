@@ -40,7 +40,8 @@
 }
 .hxs-root * { box-sizing: border-box; }
 .hxs-root :focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
-.hxs-shell { max-width: 860px; margin: 0 auto; }
+.hxs-shell { max-width: 860px; margin: 0 auto; transition: max-width .2s; }
+.hxs-shell-wide { max-width: 1120px; }
 
 /* ==============================================================
    MARCA / ENCABEZADO
@@ -173,7 +174,140 @@
 
 .hxs-envnotice { font-size: 12px; color: var(--ink-dim); display: flex; align-items: center; gap: 6px; }
 
+/* ==============================================================
+   TOPBAR — rail de pasos + ticker de resultados, todo en una barra
+   fija (evita tener dos elementos flotantes compitiendo por atención).
+   ============================================================== */
+.hxs-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  max-width: 1400px;
+  margin: 0 auto 28px;
+  padding: 11px 18px;
+  background: rgba(15, 18, 21, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.hxs-topbar-brand { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.hxs-steps { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.hxs-steps::-webkit-scrollbar { display: none; }
+.hxs-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  white-space: nowrap;
+  padding: 6px 12px;
+  border-radius: 100px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: all .15s;
+}
+.hxs-step:disabled { cursor: not-allowed; opacity: .45; }
+.hxs-step:not(:disabled):hover { border-color: var(--brass); color: var(--ink); }
+.hxs-step-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); flex-shrink: 0; transition: background .15s; }
+.hxs-step[data-state="done"] { color: var(--good); border-color: rgba(130,181,148,0.35); }
+.hxs-step[data-state="done"] .hxs-step-dot { background: var(--good); }
+.hxs-step[data-state="active"] { color: var(--brass); border-color: var(--copper-line); background: var(--copper-dim); }
+.hxs-step[data-state="active"] .hxs-step-dot { background: var(--brass); box-shadow: 0 0 0 3px rgba(227,172,92,0.18); }
+.hxs-step[data-state="warn"] { color: var(--bad); border-color: rgba(225,127,121,0.38); }
+.hxs-step[data-state="warn"] .hxs-step-dot { background: var(--bad); }
+.hxs-ticker {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.hxs-ticker b { color: var(--ink); font-weight: 600; }
+@media (max-width: 720px) {
+  .hxs-ticker { display: none; }
+}
+
+/* ==============================================================
+   WORKSPACE — 2 columnas en escritorio, la derecha fija (sticky)
+   mientras se scrollea la izquierda.
+   ============================================================== */
+.hxs-workspace { display: grid; grid-template-columns: 1fr; gap: 20px; align-items: start; }
+@media (min-width: 980px) {
+  .hxs-workspace { grid-template-columns: minmax(0, 1fr) minmax(0, 0.86fr); gap: 26px; }
+  .hxs-col-right {
+    position: sticky;
+    top: 74px;
+    max-height: calc(100vh - 94px);
+    overflow-y: auto;
+    padding-right: 6px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+  .hxs-col-right::-webkit-scrollbar { width: 6px; }
+  .hxs-col-right::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 6px; }
+}
+.hxs-empty-results {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.hxs-empty-results p { margin: 0; max-width: 32ch; }
+
+/* ==============================================================
+   TABS — usadas en "Datos detectados" (Datos principales / Avanzado)
+   ============================================================== */
+.hxs-tabs { display: flex; align-items: center; gap: 18px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+.hxs-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 9px 2px;
+  margin-bottom: -1px;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color .15s, border-color .15s;
+}
+.hxs-tab[data-active="true"] { color: var(--ink); border-color: var(--brass); }
+.hxs-tab:hover:not([data-active="true"]) { color: var(--ink-dim); }
+.hxs-tab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brass); }
+
+/* ==============================================================
+   SIMULACIÓN A ANCHO COMPLETO — sección final, fuera de las 2
+   columnas, para que el SVG (que escala con el ancho del contenedor)
+   se vea mucho más grande que confinado en la columna de resultados.
+   ============================================================== */
+.hxs-sim-full .hxs-card { padding: 26px 28px 22px; }
+.hxs-sim-full .hxs-section-title { font-size: 17px; }
+@media (max-width: 480px) {
+  .hxs-sim-full .hxs-card { padding: 16px; }
+}
+
 @media (max-width: 480px) {
   .hxs-root { padding: 26px 12px 44px; }
   .hxs-card { padding: 15px; }
+  .hxs-topbar { padding: 9px 12px; gap: 10px; margin-bottom: 20px; }
+  .hxs-topbar-brand { display: none; }
 }
