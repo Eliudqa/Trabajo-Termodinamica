@@ -400,8 +400,24 @@ export function generateProfile(isParallel, Th_in, Th_out, Tc_in, Tc_out, Ch, Cc
   return points;
 }
 
-// Factor de corrección F para la config. dada, una vez se conocen las 4 temperaturas.
-function computeCorrectionFactor(tipo, pasosCoraza, isParallel, Th_in, Th_out, Tc_in, Tc_out) {
+// Factor de corrección F para la config. dada, una vez se conocen las 4
+// temperaturas. Para coraza-tubos ya se resuelve exacto arriba
+// (correctionFactorFNShells, Bowman-Mueller-Nagle). Para FLUJO CRUZADO no
+// existe un truco algebraico tan directo como el de "N pasos en serie" de
+// la coraza, así que se calcula igual de exacto pero por otro camino:
+//   1) con las 4 temperaturas se obtiene la efectividad real ε=Q/Qmax
+//      (necesita Ch/Cc, así que solo aplica si se conocen).
+//   2) se invierte numéricamente la fórmula EXACTA de efectividad de esa
+//      config. de flujo cruzado (effectivenessFromNTU) para hallar el NTU
+//      real que produce esa ε.
+//   3) se calcula el NTU que un contraflujo puro necesitaría para la MISMA
+//      ε y el mismo Cr (fórmula cerrada estándar).
+//   4) F = NTU_contraflujo / NTU_real — la misma cantidad que representan
+//      las cartas de la Fig. 11-18 para flujo cruzado, sin tener que leerla.
+// Antes de este fix, flujo cruzado simplemente asumía F=1 siempre.
+function computeCorrectionFactor(data, configKey, isParallel, Th_in, Th_out, Tc_in, Tc_out, Ch, Cc) {
+  const tipo = data.tipo_intercambiador;
+  const pasosCoraza = data.pasos_coraza;
   if (isParallel) return { F: 1, warning: null };
   if (tipo === "tubo_doble" || !tipo) return { F: 1, warning: null };
   const P = (Tc_out - Tc_in) / (Th_in - Tc_in);
@@ -415,8 +431,37 @@ function computeCorrectionFactor(tipo, pasosCoraza, isParallel, Th_in, Th_out, T
       warning: `No se pudo calcular F automáticamente para ${N} paso(s) por la coraza (caso fuera del rango de la fórmula); se asumió F=1 — verifica la Figura 11-18 del libro.`,
     };
   }
-  // flujo_cruzado
-  return { F: 1, warning: "Flujo cruzado: F se aproximó como 1. Verifica la Figura 11-18 del libro para mayor precisión." };
+
+  // --- flujo_cruzado: F exacto vía inversión de NTU, si se conocen Ch/Cc ---
+  const chOk = isNum(Ch) || Ch === Infinity;
+  const ccOk = isNum(Cc) || Cc === Infinity;
+  const haveRates = chOk && ccOk && !(Ch === Infinity && Cc === Infinity);
+  if (haveRates) {
+    const Cmin = Math.min(Ch, Cc);
+    const Cmax = Math.max(Ch, Cc);
+    const Cr = Cmax === Infinity ? 0 : Cmin / Cmax;
+    const Qmax = Cmin * (Th_in - Tc_in);
+    const Qactual = isNum(Ch) ? Ch * (Th_in - Th_out) : Cc * (Tc_out - Tc_in);
+    const eps = isNum(Qmax) && Qmax > 0 && isNum(Qactual) ? Qactual / Qmax : null;
+    if (isNum(eps) && eps > 1e-6 && eps < 0.999999) {
+      const epsOfNTU = (ntu) => (Cr === 0 ? 1 - Math.exp(-ntu) : effectivenessFromNTU(configKey, ntu, Cr));
+      const NTU_actual = invertEffectivenessToNTU(epsOfNTU, eps);
+      if (NTU_actual != null && NTU_actual > 1e-9) {
+        let NTU_CF;
+        if (Cr === 0) NTU_CF = -Math.log(1 - eps);
+        else if (Math.abs(Cr - 1) < 1e-9) NTU_CF = eps / (1 - eps);
+        else NTU_CF = Math.log((eps - 1) / (eps * Cr - 1)) / (Cr - 1);
+        const F = NTU_CF / NTU_actual;
+        if (isNum(F) && F > 0 && F <= 1.0001) return { F: Math.min(F, 1), warning: null };
+      }
+    }
+  }
+  return {
+    F: 1,
+    warning: haveRates
+      ? "No se pudo calcular F con precisión para este flujo cruzado (caso fuera de rango); se asumió F=1 — verifica la Figura 11-18 del libro."
+      : "No se pudo calcular F con precisión para este flujo cruzado (faltan los gastos másicos de los fluidos): se asumió F=1 — verifica la Figura 11-18 del libro.",
+  };
 }
 
 // ------------------------------------------------------------
@@ -425,7 +470,7 @@ function computeCorrectionFactor(tipo, pasosCoraza, isParallel, Th_in, Th_out, T
 // y sus tres despejes, back-fill de gastos másicos) hasta que ya
 // no se pueda deducir nada más. Muta `s`, `hot` y `cold` en el sitio.
 // ------------------------------------------------------------
-function runPropagation(s, hot, cold, data, isParallel) {
+function runPropagation(s, hot, cold, data, isParallel, configKey) {
   let changed = true;
   let iterations = 0;
   const warnings = [];
@@ -476,7 +521,7 @@ function runPropagation(s, hot, cold, data, isParallel) {
         s.dT1 = dT1;
         s.dT2 = dT2;
         s.dTml_CF = val;
-        const { F, warning } = computeCorrectionFactor(data.tipo_intercambiador, data.pasos_coraza, isParallel, s.Th_in, s.Th_out, s.Tc_in, s.Tc_out);
+        const { F, warning } = computeCorrectionFactor(data, configKey, isParallel, s.Th_in, s.Th_out, s.Tc_in, s.Tc_out, s.Ch, s.Cc);
         s.F = F;
         s.F_computed = true;
         if (warning) warnings.push(warning);
@@ -698,7 +743,7 @@ export function solveExchanger(data) {
     warnings.push(`Se usó directamente la carga de transferencia de calor dada en el enunciado: Q=${data.Q_dado_kW} kW (no derivada de otros datos).`);
   }
 
-  warnings.push(...runPropagation(s, hot, cold, data, isParallel));
+  warnings.push(...runPropagation(s, hot, cold, data, isParallel, configKey));
 
   // ------------------------------------------------------------
   // Diseño inverso: número de tubos necesario para que la velocidad del
@@ -778,7 +823,7 @@ export function solveExchanger(data) {
       if (s.Q_hot == null) s.Q_hot = lossFraction < 0.999 ? s.Q_cold / (1 - lossFraction) : s.Q_cold;
       method = "NTU";
       ntuInfo = { Cmin, Cmax, C, NTU: NTU_solved, eps: epsTarget };
-      warnings.push(...runPropagation(s, hot, cold, data, isParallel));
+      warnings.push(...runPropagation(s, hot, cold, data, isParallel, configKey));
     }
   }
 
@@ -814,7 +859,7 @@ export function solveExchanger(data) {
 
       // segunda pasada de propagación: con Q ya resuelto por NTU, se pueden
       // completar temperaturas de salida, ΔTml, gastos másicos, etc.
-      warnings.push(...runPropagation(s, hot, cold, data, isParallel));
+      warnings.push(...runPropagation(s, hot, cold, data, isParallel, configKey));
     }
   }
 
